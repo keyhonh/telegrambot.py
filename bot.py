@@ -78,7 +78,21 @@ def unban_user(user_id):
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+async def business_auto_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.business_message:
+        try:
+            await context.bot.send_message(
+                chat_id=update.business_message.chat.id,
+                text="Salom! 👋 Xabaringizni oldim. Tez orada javob beraman."
+            )
+        except Exception as e:
+            logger.error(f"Business auto-reply xatosi: {e}")
+
 # ---------- Bot handlerlari ----------
+application.add_handler(
+    MessageHandler(filters.ALL, lambda u, c: None)
+)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     add_user(user.id, user.username, user.first_name, user.last_name)
@@ -383,7 +397,9 @@ def main():
     )
 
     logger.info("Bot ishga tushdi!")
-    application.run_polling()
+    application.run_polling(
+    allowed_updates=Update.ALL_TYPES
+)
 
 
 if __name__ == '__main__':
