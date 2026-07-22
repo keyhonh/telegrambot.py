@@ -90,7 +90,7 @@ async def business_auto_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # ---------- Bot handlerlari ----------
     application.add_handler(
-    MessageHandler(filters.ALL, lambda u, c: None)
+        MessageHandler(filters.ALL, lambda u, c: None)
 )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
