@@ -89,7 +89,12 @@ async def business_auto_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.error(f"Business auto-reply xatosi: {e}")
 
 # ---------- Bot handlerlari ----------
-
+application.add_handler(
+    MessageHandler(
+        filters.ALL,
+        business_auto_reply
+    )
+)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     add_user(user.id, user.username, user.first_name, user.last_name)
@@ -113,12 +118,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Assalomu alaykum, {user.first_name}!\n"
             "Botimizga xush kelibsiz."
         )
-application.add_handler(
-    MessageHandler(
-        filters.ALL,
-        business_auto_reply
-    )
-)
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
