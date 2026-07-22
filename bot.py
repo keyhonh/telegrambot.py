@@ -304,7 +304,20 @@ async def left_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat = update.effective_chat
             c.execute("DELETE FROM groups WHERE chat_id=?", (chat.id,))
             conn.commit()
-context.bot.send_message(chat.id, "Assalomu alaykum! Bot guruhga qo'shildi.")
+async def new_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    for member in update.my_chat_member.new_chat_members:
+        if member.id == context.bot.id:
+            chat = update.effective_chat
+            c.execute(
+                "INSERT OR IGNORE INTO groups (chat_id, title) VALUES (?, ?)",
+                (chat.id, chat.title)
+            )
+            conn.commit()
+
+            await context.bot.send_message(
+                chat_id=chat.id,
+                text="Assalomu alaykum! Bot guruhga qo'shildi."
+            )
 
 async def left_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for member in update.my_chat_member.left_chat_members:
