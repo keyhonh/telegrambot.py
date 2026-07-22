@@ -323,17 +323,17 @@ def main():
 
     # Handlerlar
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("admin", admin_panel))
+    application.add_handler(CommandHandler("admin", admin_panel))
 
-application.add_handler(
-    MessageHandler(
-        filters.Regex("^🛠 Admin panel$"),
-        admin_panel
+    # Admin panel tugmasi
+    application.add_handler(
+        MessageHandler(
+            filters.Regex("^🛠 Admin panel$"),
+            admin_panel
+        )
     )
-)
 
-application.add_handler(CommandHandler("stats", admin_panel))
+    application.add_handler(CommandHandler("stats", admin_panel))
     application.add_handler(CommandHandler("ban", ban_command))
     application.add_handler(CommandHandler("unban", unban_command))
 
@@ -341,9 +341,17 @@ application.add_handler(CommandHandler("stats", admin_panel))
     broadcast_conv = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_start)],
         states={
-            BROADCAST_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_receive_text)],
+            BROADCAST_TEXT: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    broadcast_receive_text
+                )
+            ],
             BROADCAST_MEDIA: [
-                MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, broadcast_receive_media),
+                MessageHandler(
+                    filters.PHOTO | filters.VIDEO | filters.Document.ALL,
+                    broadcast_receive_media
+                ),
                 CommandHandler("skip", broadcast_skip)
             ]
         },
@@ -352,17 +360,32 @@ application.add_handler(CommandHandler("stats", admin_panel))
     application.add_handler(broadcast_conv)
 
     # Guruh qo'shilish/chiqish
-    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, new_chat_member))
-    application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, left_chat_member))
+    application.add_handler(
+        MessageHandler(
+            filters.StatusUpdate.NEW_CHAT_MEMBERS,
+            new_chat_member
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.StatusUpdate.LEFT_CHAT_MEMBER,
+            left_chat_member
+        )
+    )
 
     # Callback (admin panel tugmalari)
-    application.add_handler(CallbackQueryHandler(callback_handler))
+    application.add_handler(
+        CallbackQueryHandler(callback_handler)
+    )
 
     # Qolgan xabarlarni ushlash
-    application.add_handler(MessageHandler(filters.ALL, lambda u, c: None))
+    application.add_handler(
+        MessageHandler(filters.ALL, lambda u, c: None)
+    )
 
     logger.info("Bot ishga tushdi!")
     application.run_polling()
+
 
 if __name__ == '__main__':
     main()
