@@ -298,13 +298,16 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Iltimos, foydalanuvchi ID sini yuboring. Misol: /unban 123456789")
 
 # ---------- Yangi guruh qo'shilganda ----------
-async def new_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    for member in update.my_chat_member.new_chat_members:
-        if member.id == context.bot.id:
+async def left_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.my_chat_member:
+        old_status = update.my_chat_member.old_chat_member.status
+        new_status = update.my_chat_member.new_chat_member.status
+
+        if old_status in ["member", "administrator"] and new_status in ["left", "kicked"]:
             chat = update.effective_chat
-            c.execute("INSERT OR IGNORE INTO groups (chat_id, title) VALUES (?, ?)", (chat.id, chat.title))
+            c.execute("DELETE FROM groups WHERE chat_id=?", (chat.id,))
             conn.commit()
-            await context.bot.send_message(chat.id, "Assalomu alaykum! Bot guruhga qo'shildi.")
+context.bot.send_message(chat.id, "Assalomu alaykum! Bot guruhga qo'shildi.")
 
 async def left_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for member in update.my_chat_member.left_chat_members:
