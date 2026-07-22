@@ -15,7 +15,7 @@ from telegram.ext import (
 # ---------- Sozlamalar ----------
 import os
 
-BOT_TOKEN = os.environ["8802746857:AAG9xGanE9hNwxjpgV41mzKFi4HRPYuXCrc"]
+BOT_TOKEN = os.environ["8802746857:AAEHlGuozeX910Iq2whMfH4Z14pMz_v_eqE"]
 ADMIN_IDS = [7195607202]
 
 # ---------- Ma'lumotlar bazasi ----------
