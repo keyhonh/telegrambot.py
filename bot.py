@@ -325,7 +325,7 @@ def main():
     application.add_handler(broadcast_conv)
 
     # Guruh qo'shilish/chiqish
-    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBER, new_chat_member))
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, new_chat_member))
     application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, left_chat_member))
 
     # Callback (admin panel tugmalari)
