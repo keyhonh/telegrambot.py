@@ -334,7 +334,6 @@ application.add_handler(
 )
 
 application.add_handler(CommandHandler("stats", admin_panel))
-    application.add_handler(CommandHandler("stats", admin_panel))  # statistikaga tez kirish
     application.add_handler(CommandHandler("ban", ban_command))
     application.add_handler(CommandHandler("unban", unban_command))
 
