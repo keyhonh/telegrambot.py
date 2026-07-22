@@ -92,13 +92,14 @@ async def business_auto_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
     except Exception as e:
         logger.error(f"Business auto-reply xatosi: {e}")
-# ---------- Bot handlerlari ----------
-application.add_handler(
+    application.add_handler(
     MessageHandler(
         filters.ALL,
         business_auto_reply
     )
 )
+# ---------- Bot handlerlari ----------
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     add_user(user.id, user.username, user.first_name, user.last_name)
