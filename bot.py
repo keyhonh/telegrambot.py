@@ -2,6 +2,7 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -82,9 +83,26 @@ logger = logging.getLogger(__name__)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     add_user(user.id, user.username, user.first_name, user.last_name)
-    await update.message.reply_text(
-        f"Assalomu alaykum, {user.first_name}!\nBotimizga xush kelibsiz.\nAdmin panel uchun /admin bosing."
-    )
+
+    if is_admin(user.id):
+        keyboard = [
+            ["🛠 Admin panel"]
+        ]
+        reply_markup = ReplyKeyboardMarkup(
+            keyboard,
+            resize_keyboard=True
+        )
+
+        await update.message.reply_text(
+            f"Assalomu alaykum, {user.first_name}!\n"
+            "Botimizga xush kelibsiz.",
+            reply_markup=reply_markup
+        )
+    else:
+        await update.message.reply_text(
+            f"Assalomu alaykum, {user.first_name}!\n"
+            "Botimizga xush kelibsiz."
+        )
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -305,7 +323,17 @@ def main():
 
     # Handlerlar
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("admin", admin_panel))
+    application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("admin", admin_panel))
+
+application.add_handler(
+    MessageHandler(
+        filters.Regex("^🛠 Admin panel$"),
+        admin_panel
+    )
+)
+
+application.add_handler(CommandHandler("stats", admin_panel))
     application.add_handler(CommandHandler("stats", admin_panel))  # statistikaga tez kirish
     application.add_handler(CommandHandler("ban", ban_command))
     application.add_handler(CommandHandler("unban", unban_command))
