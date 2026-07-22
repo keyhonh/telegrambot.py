@@ -113,6 +113,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Assalomu alaykum, {user.first_name}!\n"
             "Botimizga xush kelibsiz."
         )
+application.add_handler(
+    MessageHandler(
+        filters.ALL,
+        business_auto_reply
+    )
+)
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -319,13 +325,6 @@ async def new_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text="Assalomu alaykum! Bot guruhga qo'shildi."
             )
 
-async def left_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    for member in update.my_chat_member.left_chat_members:
-        if member.id == context.bot.id:
-            chat = update.effective_chat
-            c.execute("DELETE FROM groups WHERE chat_id=?", (chat.id,))
-            conn.commit()
-
 # ---------- Callback handler ----------
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -402,11 +401,6 @@ def main():
     # Callback (admin panel tugmalari)
     application.add_handler(
         CallbackQueryHandler(callback_handler)
-    )
-
-    # Qolgan xabarlarni ushlash
-    application.add_handler(
-        MessageHandler(filters.ALL, lambda u, c: None)
     )
 
     logger.info("Bot ishga tushdi!")
