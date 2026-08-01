@@ -1,417 +1,472 @@
 import logging
+import os
 import sqlite3
-from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+import time
+from collections import defaultdict, deque
+
+from telegram import Update, ChatPermissions
+from telegram.constants import ChatMemberStatus
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    ContextTypes,
     filters,
-    ConversationHandler,
-    CallbackQueryHandler,
-    ContextTypes
 )
 
-# ---------- Sozlamalar ----------
-import os
+# ----------------------------------------------------------------------
+# SOZLAMALAR
+# ----------------------------------------------------------------------
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "BU_YERGA_TOKENINGIZNI_QOYING")
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-ADMIN_IDS = [7195607202]
+MAX_WARNS = 3                # nechta warndan keyin foydalanuvchi bloklanadi
+FLOOD_LIMIT = 5              # necha xabar
+FLOOD_SECONDS = 6            # necha soniya ichida yuborilsa spam hisoblanadi
+FLOOD_MUTE_MINUTES = 10      # spamchini necha daqiqaga mute qilish
+BAD_WORDS = ["so'kinish1", "so'kinish2"]  # taqiqlangan so'zlarni shu yerga qo'shing
 
-# ---------- Ma'lumotlar bazasi ----------
-conn = sqlite3.connect('bot_data.db', check_same_thread=False)
-c = conn.cursor()
-
-c.execute('''CREATE TABLE IF NOT EXISTS users
-             (user_id INTEGER PRIMARY KEY, 
-              username TEXT, 
-              first_name TEXT, 
-              last_name TEXT,
-              join_date TEXT,
-              is_banned INTEGER DEFAULT 0)''')
-
-c.execute('''CREATE TABLE IF NOT EXISTS groups
-             (chat_id INTEGER PRIMARY KEY, 
-              title TEXT)''')
-
-conn.commit()
-
-# ---------- Yordamchi funksiyalar ----------
-def add_user(user_id, username, first_name, last_name):
-    c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, join_date) VALUES (?, ?, ?, ?, ?)",
-              (user_id, username, first_name, last_name, datetime.now().isoformat()))
-    conn.commit()
-
-def is_admin(user_id):
-    return user_id in ADMIN_IDS
-
-def get_users_count():
-    c.execute("SELECT COUNT(*) FROM users")
-    return c.fetchone()[0]
-
-def get_banned_users():
-    c.execute("SELECT COUNT(*) FROM users WHERE is_banned=1")
-    return c.fetchone()[0]
-
-def get_recent_users(hours=24):
-    since = datetime.now() - timedelta(hours=hours)
-    c.execute("SELECT COUNT(*) FROM users WHERE join_date > ?", (since.isoformat(),))
-    return c.fetchone()[0]
-
-def all_users():
-    c.execute("SELECT user_id FROM users WHERE is_banned=0")
-    return [row[0] for row in c.fetchall()]
-
-def all_groups():
-    c.execute("SELECT chat_id FROM groups")
-    return [row[0] for row in c.fetchall()]
-
-def ban_user(user_id):
-    c.execute("UPDATE users SET is_banned=1 WHERE user_id=?", (user_id,))
-    conn.commit()
-
-def unban_user(user_id):
-    c.execute("UPDATE users SET is_banned=0 WHERE user_id=?", (user_id,))
-    conn.commit()
-
-# ---------- Logging ----------
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
 logger = logging.getLogger(__name__)
 
-async def business_auto_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.business_message
+# Flood nazorati uchun xotirada saqlanadigan struktura: {(chat_id, user_id): deque[timestamps]}
+user_message_times = defaultdict(lambda: deque(maxlen=FLOOD_LIMIT))
 
-    if not message:
-        return
+DB_PATH = "bot_data.db"
 
-    try:
-        await context.bot.send_message(
-            chat_id=message.chat.id,
-            text="Salom! 👋 Xabaringizni oldim. Tez orada javob beraman.",
-            business_connection_id=message.business_connection_id
+
+# ----------------------------------------------------------------------
+# MA'LUMOTLAR BAZASI
+# ----------------------------------------------------------------------
+def db_init():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS warns (
+            chat_id INTEGER,
+            user_id INTEGER,
+            count INTEGER DEFAULT 0,
+            PRIMARY KEY (chat_id, user_id)
         )
-    except Exception as e:
-        logger.error(f"Business auto-reply xatosi: {e}")
-    application.add_handler(
-    MessageHandler(
-        filters.ALL,
-        business_auto_reply
-    )
-)
-# ---------- Bot handlerlari ----------
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            chat_id INTEGER PRIMARY KEY,
+            link_filter INTEGER DEFAULT 1,
+            welcome_enabled INTEGER DEFAULT 1
+        )
+    """)
+    conn.commit()
+    conn.close()
 
+
+def get_settings(chat_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT link_filter, welcome_enabled FROM settings WHERE chat_id=?", (chat_id,))
+    row = cur.fetchone()
+    if row is None:
+        cur.execute("INSERT INTO settings (chat_id) VALUES (?)", (chat_id,))
+        conn.commit()
+        row = (1, 1)
+    conn.close()
+    return {"link_filter": bool(row[0]), "welcome_enabled": bool(row[1])}
+
+
+def set_setting(chat_id: int, key: str, value: bool):
+    get_settings(chat_id)  # qator mavjudligiga ishonch hosil qilish
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(f"UPDATE settings SET {key}=? WHERE chat_id=?", (int(value), chat_id))
+    conn.commit()
+    conn.close()
+
+
+def add_warn(chat_id: int, user_id: int) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO warns (chat_id, user_id, count) VALUES (?, ?, 0)", (chat_id, user_id))
+    cur.execute("UPDATE warns SET count = count + 1 WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    cur.execute("SELECT count FROM warns WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    count = cur.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return count
+
+
+def reset_warns(chat_id: int, user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("UPDATE warns SET count = 0 WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_warns(chat_id: int, user_id: int) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT count FROM warns WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+
+# ----------------------------------------------------------------------
+# YORDAMCHI FUNKSIYALAR
+# ----------------------------------------------------------------------
+async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int = None) -> bool:
+    user_id = user_id or update.effective_user.id
+    member = await context.bot.get_chat_member(update.effective_chat.id, user_id)
+    return member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
+
+
+def get_target_user(update: Update):
+    """Reply qilingan xabardan foydalanuvchini aniqlaydi."""
+    if update.message.reply_to_message:
+        return update.message.reply_to_message.from_user
+    return None
+
+
+# ----------------------------------------------------------------------
+# XUSH KELIBSIZ
+# ----------------------------------------------------------------------
+async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    settings = get_settings(update.effective_chat.id)
+    if not settings["welcome_enabled"]:
+        return
+    for member in update.message.new_chat_members:
+        if member.is_bot:
+            continue
+        await update.message.reply_text(
+            f"👋 Xush kelibsiz, {member.mention_html()}!\n"
+            f"Guruh qoidalari bilan tanishib chiqishingizni so'raymiz.",
+            parse_mode="HTML",
+        )
+
+
+# ----------------------------------------------------------------------
+# ASOSIY BUYRUQLAR
+# ----------------------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Salom! Men guruh boshqaruvi uchun botman.\n"
+        "Meni guruhga admin qilib qo'shing va /help buyrug'i bilan imkoniyatlarimni ko'ring."
+    )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🛠 <b>Admin buyruqlari</b> (xabarga reply qilib ishlatiladi):\n"
+        "/ban - Foydalanuvchini bloklash\n"
+        "/unban - Blokdan chiqarish (user_id bilan: /unban 123456)\n"
+        "/kick - Guruhdan chiqarib yuborish\n"
+        "/mute - Yozishni taqiqlash\n"
+        "/unmute - Yozishga ruxsat berish\n"
+        "/warn - Ogohlantirish berish (3 tadan keyin avtomatik ban)\n"
+        "/unwarn - Ogohlantirishni bekor qilish\n"
+        "/warns - Ogohlantirishlar sonini ko'rish\n"
+        "/purge - Reply qilingan xabargacha bo'lgan barcha xabarlarni o'chirish\n"
+        "/pin - Xabarni mahkamlash\n"
+        "/unpin - Mahkamlashni bekor qilish\n\n"
+        "⚙️ <b>Sozlamalar</b>:\n"
+        "/setlinks on|off - Link filtrini yoqish/o'chirish\n"
+        "/setwelcome on|off - Xush kelibsiz xabarini yoqish/o'chirish\n\n"
+        "🛡 Avtomatik: spam/flood filtri va taqiqlangan so'zlar filtri doim ishlaydi."
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+# ----------------------------------------------------------------------
+# ADMIN BUYRUQLARI
+# ----------------------------------------------------------------------
+async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    target = get_target_user(update)
+    if not target:
+        await update.message.reply_text("Bloklamoqchi bo'lgan foydalanuvchi xabariga reply qiling.")
+        return
+    await context.bot.ban_chat_member(update.effective_chat.id, target.id)
+    await update.message.reply_text(f"🚫 {target.mention_html()} bloklandi.", parse_mode="HTML")
+
+
+async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    if not context.args:
+        await update.message.reply_text("Foydalanish: /unban <user_id>")
+        return
+    user_id = int(context.args[0])
+    await context.bot.unban_chat_member(update.effective_chat.id, user_id)
+    await update.message.reply_text(f"✅ Foydalanuvchi (ID: {user_id}) blokdan chiqarildi.")
+
+
+async def kick_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    target = get_target_user(update)
+    if not target:
+        await update.message.reply_text("Chiqarmoqchi bo'lgan foydalanuvchi xabariga reply qiling.")
+        return
+    await context.bot.ban_chat_member(update.effective_chat.id, target.id)
+    await context.bot.unban_chat_member(update.effective_chat.id, target.id)
+    await update.message.reply_text(f"👢 {target.mention_html()} guruhdan chiqarildi.", parse_mode="HTML")
+
+
+async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    target = get_target_user(update)
+    if not target:
+        await update.message.reply_text("Mute qilmoqchi bo'lgan foydalanuvchi xabariga reply qiling.")
+        return
+    await context.bot.restrict_chat_member(
+        update.effective_chat.id, target.id, ChatPermissions(can_send_messages=False)
+    )
+    await update.message.reply_text(f"🔇 {target.mention_html()} ovozsiz qilindi.", parse_mode="HTML")
+
+
+async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    target = get_target_user(update)
+    if not target:
+        await update.message.reply_text("Unmute qilmoqchi bo'lgan foydalanuvchi xabariga reply qiling.")
+        return
+    await context.bot.restrict_chat_member(
+        update.effective_chat.id, target.id, ChatPermissions(can_send_messages=True)
+    )
+    await update.message.reply_text(f"🔊 {target.mention_html()}ga yozish ruxsati qaytarildi.", parse_mode="HTML")
+
+
+async def warn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    target = get_target_user(update)
+    if not target:
+        await update.message.reply_text("Ogohlantirmoqchi bo'lgan foydalanuvchi xabariga reply qiling.")
+        return
+    count = add_warn(update.effective_chat.id, target.id)
+    if count >= MAX_WARNS:
+        await context.bot.ban_chat_member(update.effective_chat.id, target.id)
+        reset_warns(update.effective_chat.id, target.id)
+        await update.message.reply_text(
+            f"🚫 {target.mention_html()} {MAX_WARNS} marta ogohlantirilgani uchun bloklandi.",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            f"⚠️ {target.mention_html()} ogohlantirildi. ({count}/{MAX_WARNS})",
+            parse_mode="HTML",
+        )
+
+
+async def unwarn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    target = get_target_user(update)
+    if not target:
+        await update.message.reply_text("Foydalanuvchi xabariga reply qiling.")
+        return
+    reset_warns(update.effective_chat.id, target.id)
+    await update.message.reply_text(f"✅ {target.mention_html()}ning ogohlantirishlari tozalandi.", parse_mode="HTML")
+
+
+async def warns_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target = get_target_user(update) or update.effective_user
+    count = get_warns(update.effective_chat.id, target.id)
+    await update.message.reply_text(f"{target.mention_html()}: {count}/{MAX_WARNS} ogohlantirish", parse_mode="HTML")
+
+
+async def purge_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    if not update.message.reply_to_message:
+        await update.message.reply_text("O'chirish boshlanishi kerak bo'lgan xabarga reply qiling.")
+        return
+    start_id = update.message.reply_to_message.message_id
+    end_id = update.message.message_id
+    deleted = 0
+    for msg_id in range(end_id, start_id - 1, -1):
+        try:
+            await context.bot.delete_message(update.effective_chat.id, msg_id)
+            deleted += 1
+        except Exception:
+            pass
+    logger.info(f"{deleted} ta xabar o'chirildi (chat {update.effective_chat.id})")
+
+
+async def pin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    if not update.message.reply_to_message:
+        await update.message.reply_text("Mahkamlamoqchi bo'lgan xabarga reply qiling.")
+        return
+    await context.bot.pin_chat_message(update.effective_chat.id, update.message.reply_to_message.message_id)
+
+
+async def unpin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    await context.bot.unpin_chat_message(update.effective_chat.id)
+
+
+# ----------------------------------------------------------------------
+# SOZLAMA BUYRUQLARI
+# ----------------------------------------------------------------------
+async def set_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    if not context.args or context.args[0] not in ("on", "off"):
+        await update.message.reply_text("Foydalanish: /setlinks on yoki /setlinks off")
+        return
+    set_setting(update.effective_chat.id, "link_filter", context.args[0] == "on")
+    await update.message.reply_text(f"🔗 Link filtri: {context.args[0].upper()}")
+
+
+async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("❌ Bu buyruq faqat adminlar uchun.")
+        return
+    if not context.args or context.args[0] not in ("on", "off"):
+        await update.message.reply_text("Foydalanish: /setwelcome on yoki /setwelcome off")
+        return
+    set_setting(update.effective_chat.id, "welcome_enabled", context.args[0] == "on")
+    await update.message.reply_text(f"👋 Xush kelibsiz xabari: {context.args[0].upper()}")
+
+
+# ----------------------------------------------------------------------
+# XABARLARNI NAZORAT QILISH: SPAM, LINK, TAQIQLANGAN SO'ZLAR
+# ----------------------------------------------------------------------
+async def moderate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+    chat_id = update.effective_chat.id
     user = update.effective_user
-    add_user(user.id, user.username, user.first_name, user.last_name)
 
-    if is_admin(user.id):
-        keyboard = [
-            ["🛠 Admin panel"]
-        ]
-        reply_markup = ReplyKeyboardMarkup(
-            keyboard,
-            resize_keyboard=True
-        )
-
-        await update.message.reply_text(
-            f"Assalomu alaykum, {user.first_name}!\n"
-            "Botimizga xush kelibsiz.",
-            reply_markup=reply_markup
-        )
-    else:
-        await update.message.reply_text(
-            f"Assalomu alaykum, {user.first_name}!\n"
-            "Botimizga xush kelibsiz."
-        )
-
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("Siz admin emassiz!")
+    # Adminlarni tekshirmaymiz - ular filtrlardan ozod
+    if await is_admin(update, context, user.id):
         return
-    keyboard = [
-        [InlineKeyboardButton("📊 Statistika", callback_data='stats')],
-        [InlineKeyboardButton("📢 Post yuborish", callback_data='broadcast')],
-        [InlineKeyboardButton("👤 Foydalanuvchilar", callback_data='users')],
-        [InlineKeyboardButton("🚫 Bloklanganlar", callback_data='banned')],
-        [InlineKeyboardButton("👥 Guruhlar", callback_data='groups')],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Admin panelga xush kelibsiz!", reply_markup=reply_markup)
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if not is_admin(query.from_user.id):
-        await query.edit_message_text("Siz admin emassiz!")
-        return
-    users_count = get_users_count()
-    banned_count = get_banned_users()
-    recent_24h = get_recent_users(24)
-    recent_7d = get_recent_users(168)
-    text = (f"📊 **Bot statistikasi**\n\n"
-            f"👥 Jami foydalanuvchilar: {users_count}\n"
-            f"🚫 Bloklanganlar: {banned_count}\n"
-            f"✅ Faol foydalanuvchilar: {users_count - banned_count}\n"
-            f"🆕 24 soat ichida qo'shilgan: {recent_24h}\n"
-            f"🆕 7 kun ichida qo'shilgan: {recent_7d}")
-    await query.edit_message_text(text, parse_mode='Markdown')
+    text = update.message.text
+    settings = get_settings(chat_id)
 
-# ---------- Broadcast post yuborish ----------
-BROADCAST_TEXT, BROADCAST_MEDIA = range(2)
-
-async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("Siz admin emassiz!")
-        return
-    await update.message.reply_text("Post matnini yuboring (yoki tugatish uchun /cancel):")
-    return BROADCAST_TEXT
-
-async def broadcast_receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['broadcast_text'] = update.message.text
-    await update.message.reply_text("Endi rasm/video yuboring (yoki /skip tugmasini bosing):")
-    return BROADCAST_MEDIA
-
-async def broadcast_receive_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    media = None
-    if update.message.photo:
-        media = update.message.photo[-1].file_id
-    elif update.message.video:
-        media = update.message.video.file_id
-    elif update.message.document:
-        media = update.message.document.file_id
-    context.user_data['broadcast_media'] = media
-    # Postni yuborish
-    text = context.user_data['broadcast_text']
-    users = all_users()
-    groups = all_groups()
-    success = 0
-    failed = 0
-    for chat_id in users:
+    # 1) Taqiqlangan so'zlar
+    lowered = text.lower()
+    if any(bad in lowered for bad in BAD_WORDS):
         try:
-            if media:
-                if update.message.photo:
-                    await context.bot.send_photo(chat_id=chat_id, photo=media, caption=text)
-                elif update.message.video:
-                    await context.bot.send_video(chat_id=chat_id, video=media, caption=text)
-                else:
-                    await context.bot.send_document(chat_id=chat_id, document=media, caption=text)
-            else:
-                await context.bot.send_message(chat_id=chat_id, text=text)
-            success += 1
-        except Exception as e:
-            failed += 1
-            logger.error(f"Xato {chat_id}: {e}")
-    # Guruhlarga ham yuborish
-    for chat_id in groups:
+            await update.message.delete()
+        except Exception:
+            pass
+        count = add_warn(chat_id, user.id)
+        await context.bot.send_message(
+            chat_id,
+            f"🚫 {user.mention_html()}, xabaringizda taqiqlangan so'z bor edi va o'chirildi. "
+            f"({count}/{MAX_WARNS} ogohlantirish)",
+            parse_mode="HTML",
+        )
+        if count >= MAX_WARNS:
+            await context.bot.ban_chat_member(chat_id, user.id)
+            reset_warns(chat_id, user.id)
+        return
+
+    # 2) Link filtri
+    if settings["link_filter"] and ("http://" in lowered or "https://" in lowered or "t.me/" in lowered):
         try:
-            if media:
-                # shunga o'xshash
-                await context.bot.send_message(chat_id=chat_id, text=text)
-            else:
-                await context.bot.send_message(chat_id=chat_id, text=text)
-            success += 1
-        except:
-            failed += 1
-    await update.message.reply_text(f"✅ Post yuborildi.\nMuvaffaqiyatli: {success}\nXatolik: {failed}")
-    return ConversationHandler.END
+            await update.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(
+            chat_id,
+            f"🔗 {user.mention_html()}, guruhda link tashlash taqiqlangan.",
+            parse_mode="HTML",
+        )
+        return
 
-async def broadcast_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['broadcast_media'] = None
-    # Postni faqat matn bilan yuborish
-    text = context.user_data['broadcast_text']
-    users = all_users()
-    success = 0
-    failed = 0
-    for chat_id in users:
+    # 3) Flood/spam nazorati
+    key = (chat_id, user.id)
+    now = time.time()
+    user_message_times[key].append(now)
+    times = user_message_times[key]
+    if len(times) == FLOOD_LIMIT and (now - times[0]) < FLOOD_SECONDS:
+        until = int(now + FLOOD_MUTE_MINUTES * 60)
         try:
-            await context.bot.send_message(chat_id=chat_id, text=text)
-            success += 1
-        except:
-            failed += 1
-    await update.message.reply_text(f"✅ Post yuborildi.\nMuvaffaqiyatli: {success}\nXatolik: {failed}")
-    return ConversationHandler.END
-
-async def broadcast_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bekor qilindi.")
-    return ConversationHandler.END
-
-# ---------- Foydalanuvchilar ro'yxati ----------
-async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if not is_admin(query.from_user.id):
-        await query.edit_message_text("Siz admin emassiz!")
-        return
-    c.execute("SELECT user_id, username, first_name, join_date FROM users ORDER BY join_date DESC LIMIT 50")
-    users = c.fetchall()
-    text = "👤 Foydalanuvchilar (oxirgi 50 ta):\n\n"
-    for uid, uname, fname, jdate in users:
-        username = f"@{uname}" if uname else "Yo'q"
-        text += f"ID: {uid} | Ism: {fname} | Username: {username} | Qo'shilgan: {jdate[:10]}\n"
-    await query.edit_message_text(text)
-
-async def banned_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if not is_admin(query.from_user.id):
-        await query.edit_message_text("Siz admin emassiz!")
-        return
-    c.execute("SELECT user_id, username FROM users WHERE is_banned=1")
-    banned = c.fetchall()
-    if not banned:
-        text = "Hech kim bloklanmagan."
-    else:
-        text = "🚫 Bloklangan foydalanuvchilar:\n"
-        for uid, uname in banned:
-            text += f"ID: {uid} | @{uname if uname else 'Noma\'lum'}\n"
-    await query.edit_message_text(text)
-
-async def groups_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if not is_admin(query.from_user.id):
-        await query.edit_message_text("Siz admin emassiz!")
-        return
-    c.execute("SELECT chat_id, title FROM groups")
-    groups = c.fetchall()
-    text = "👥 Guruhlar:\n"
-    for cid, title in groups:
-        text += f"ID: {cid} | {title}\n"
-    if not groups:
-        text = "Guruhlar yo'q."
-    await query.edit_message_text(text)
-
-# ---------- Ban/Unban ----------
-async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("Siz admin emassiz!")
-        return
-    try:
-        user_id = int(context.args[0])
-        ban_user(user_id)
-        await update.message.reply_text(f"Foydalanuvchi {user_id} bloklandi.")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Iltimos, foydalanuvchi ID sini yuboring. Misol: /ban 123456789")
-
-async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("Siz admin emassiz!")
-        return
-    try:
-        user_id = int(context.args[0])
-        unban_user(user_id)
-        await update.message.reply_text(f"Foydalanuvchi {user_id} blokdan chiqarildi.")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Iltimos, foydalanuvchi ID sini yuboring. Misol: /unban 123456789")
-
-# ---------- Yangi guruh qo'shilganda ----------
-async def left_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.my_chat_member:
-        old_status = update.my_chat_member.old_chat_member.status
-        new_status = update.my_chat_member.new_chat_member.status
-
-        if old_status in ["member", "administrator"] and new_status in ["left", "kicked"]:
-            chat = update.effective_chat
-            c.execute("DELETE FROM groups WHERE chat_id=?", (chat.id,))
-            conn.commit()
-async def new_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    for member in update.my_chat_member.new_chat_members:
-        if member.id == context.bot.id:
-            chat = update.effective_chat
-            c.execute(
-                "INSERT OR IGNORE INTO groups (chat_id, title) VALUES (?, ?)",
-                (chat.id, chat.title)
+            await context.bot.restrict_chat_member(
+                chat_id, user.id, ChatPermissions(can_send_messages=False), until_date=until
             )
-            conn.commit()
-
             await context.bot.send_message(
-                chat_id=chat.id,
-                text="Assalomu alaykum! Bot guruhga qo'shildi."
+                chat_id,
+                f"🔇 {user.mention_html()} spam qilgani uchun {FLOOD_MUTE_MINUTES} daqiqaga ovozsiz qilindi.",
+                parse_mode="HTML",
             )
+        except Exception as e:
+            logger.warning(f"Flood mute xatosi: {e}")
+        times.clear()
 
-# ---------- Callback handler ----------
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if query.data == 'stats':
-        await stats(update, context)
-    elif query.data == 'users':
-        await list_users(update, context)
-    elif query.data == 'banned':
-        await banned_list(update, context)
-    elif query.data == 'groups':
-        await groups_list(update, context)
-    elif query.data == 'broadcast':
-        await query.answer()
-        # broadcastni ConversationHandler orqali boshlash
-        await query.edit_message_text("Post matnini yuboring (bekor qilish: /cancel):")
-        return BROADCAST_TEXT
 
-# ---------- Asosiy funksiya ----------
+# ----------------------------------------------------------------------
+# XATOLIKLARNI USHLASH
+# ----------------------------------------------------------------------
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error("Xatolik yuz berdi:", exc_info=context.error)
+
+
+# ----------------------------------------------------------------------
+# ASOSIY FUNKSIYA
+# ----------------------------------------------------------------------
 def main():
-    application = Application.builder().token(BOT_TOKEN).build()
+    if BOT_TOKEN == "BU_YERGA_TOKENINGIZNI_QOYING":
+        print("⚠️  Iltimos, avval BOT_TOKEN qiymatini o'z tokeningiz bilan almashtiring!")
+        return
 
-    # Handlerlar
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("admin", admin_panel))
+    db_init()
+    app = Application.builder().token(BOT_TOKEN).build()
 
-    # Admin panel tugmasi
-    application.add_handler(
-        MessageHandler(
-            filters.Regex("^🛠 Admin panel$"),
-            admin_panel
-        )
-    )
+    # Asosiy buyruqlar
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
 
-    application.add_handler(CommandHandler("stats", admin_panel))
-    application.add_handler(CommandHandler("ban", ban_command))
-    application.add_handler(CommandHandler("unban", unban_command))
+    # Admin buyruqlari
+    app.add_handler(CommandHandler("ban", ban_user))
+    app.add_handler(CommandHandler("unban", unban_user))
+    app.add_handler(CommandHandler("kick", kick_user))
+    app.add_handler(CommandHandler("mute", mute_user))
+    app.add_handler(CommandHandler("unmute", unmute_user))
+    app.add_handler(CommandHandler("warn", warn_user))
+    app.add_handler(CommandHandler("unwarn", unwarn_user))
+    app.add_handler(CommandHandler("warns", warns_count))
+    app.add_handler(CommandHandler("purge", purge_messages))
+    app.add_handler(CommandHandler("pin", pin_message))
+    app.add_handler(CommandHandler("unpin", unpin_message))
 
-    # Broadcast conversation
-    broadcast_conv = ConversationHandler(
-        entry_points=[CommandHandler("broadcast", broadcast_start)],
-        states={
-            BROADCAST_TEXT: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    broadcast_receive_text
-                )
-            ],
-            BROADCAST_MEDIA: [
-                MessageHandler(
-                    filters.PHOTO | filters.VIDEO | filters.Document.ALL,
-                    broadcast_receive_media
-                ),
-                CommandHandler("skip", broadcast_skip)
-            ]
-        },
-        fallbacks=[CommandHandler("cancel", broadcast_cancel)]
-    )
-    application.add_handler(broadcast_conv)
+    # Sozlamalar
+    app.add_handler(CommandHandler("setlinks", set_links))
+    app.add_handler(CommandHandler("setwelcome", set_welcome))
 
-    # Guruh qo'shilish/chiqish
-    application.add_handler(
-        MessageHandler(
-            filters.StatusUpdate.NEW_CHAT_MEMBERS,
-            new_chat_member
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.StatusUpdate.LEFT_CHAT_MEMBER,
-            left_chat_member
-        )
-    )
+    # Yangi a'zolar
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
 
-    # Callback (admin panel tugmalari)
-    application.add_handler(
-        CallbackQueryHandler(callback_handler)
-    )
+    # Har bir matnli xabarni moderatsiya qilish (spam, link, taqiqlangan so'z)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, moderate_message))
 
-    logger.info("Bot ishga tushdi!")
-    application.run_polling(
-    allowed_updates=Update.ALL_TYPES
-)
+    app.add_error_handler(error_handler)
+
+    print("✅ Guruh boshqaruvi bot ishga tushdi...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
