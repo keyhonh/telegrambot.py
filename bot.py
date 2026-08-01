@@ -17,7 +17,7 @@ from telegram.ext import (
 # ----------------------------------------------------------------------
 # SOZLAMALAR
 # ----------------------------------------------------------------------
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "BU_YERGA_TOKENINGIZNI_QOYING")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 MAX_WARNS = 3                # nechta warndan keyin foydalanuvchi bloklanadi
 FLOOD_LIMIT = 5              # necha xabar
