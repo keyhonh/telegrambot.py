@@ -2,6 +2,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from datetime import datetime, timedelta
 
 from flask import Flask
@@ -26,13 +27,13 @@ from telegram.ext import (
 # ----------------------------------------------------------------------
 # SOZLAMALAR
 # ----------------------------------------------------------------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID"))    # <-- o'z Telegram ID raqamingiz
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "BU_YERGA_TOKENINGIZNI_QOYING")
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))  # <-- o'z Telegram ID raqamingiz
 
 # Majburiy obuna kanallari. Bot shu kanal(lar)da ADMIN bo'lishi shart.
 # id: kanal username'i ("@kanalim") yoki -100... ko'rinishidagi ID
 REQUIRED_CHANNELS = [
-    {"id": "@keyhon", "keyhon kanali": "📢 Asosiy kanal", "https://t.me/keyhon": "https://t.me/keyhon"},
+    {"id": "@kanal_username", "title": "📢 Asosiy kanal", "url": "https://t.me/kanal_username"},
     # Kerak bo'lsa yana qo'shishingiz mumkin:
     # {"id": "@ikkinchi_kanal", "title": "📢 Ikkinchi kanal", "url": "https://t.me/ikkinchi_kanal"},
 ]
@@ -537,10 +538,143 @@ async def main_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upsert_user(user)
 
     # ---- ADMIN tugmalari ----
+    # ---- ADMIN tugmalari ----
     if is_admin(user.id):
         if text == BTN_POST:
             return await post_start(update, context)
         if text == BTN_CATEGORIES:
             return await categories_menu(update, context)
         if text == BTN_ADMINS:
-            return await admin
+            return await admins_menu(update, context)
+        if text == BTN_STATS:
+            return await stats_menu(update, context)
+        # admin biror bo'lim nomini bossa ham ko'rsatib qo'yamiz
+        row = db_query("SELECT id FROM categories WHERE name=?", (text,), fetch="one")
+        if row:
+            await send_category_content(update, context, row[0], text)
+        return
+
+    # ---- ODDIY FOYDALANUVCHI ----
+    missing = await get_not_subscribed(context.bot, user.id)
+    if missing:
+        await send_subscribe_prompt(context.bot, update.effective_chat.id, missing)
+        return
+
+    row = db_query("SELECT id FROM categories WHERE name=?", (text,), fetch="one")
+    if row:
+        await send_category_content(update, context, row[0], text)
+    else:
+        await update.message.reply_text(
+            "Iltimos, quyidagi tugmalardan birini tanlang 👇",
+            reply_markup=build_user_menu(),
+        )
+
+
+# ----------------------------------------------------------------------
+# UMUMIY
+# ----------------------------------------------------------------------
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    is_adm = is_admin(update.effective_user.id)
+    await update.message.reply_text(
+        "❌ Amal bekor qilindi.",
+        reply_markup=build_admin_menu() if is_adm else build_user_menu(),
+    )
+    return ConversationHandler.END
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error("Xatolik yuz berdi:", exc_info=context.error)
+
+
+# ----------------------------------------------------------------------
+# KEEP-ALIVE HTTP SERVER (Render bepul tarifida bot uxlab qolmasligi uchun)
+# ----------------------------------------------------------------------
+keep_alive_app = Flask(__name__)
+
+
+@keep_alive_app.route("/")
+def keep_alive_home():
+    return "Bot ishlayapti ✅"
+
+
+def run_keep_alive_server():
+    port = int(os.getenv("PORT", "10000"))
+    logger.info(f"🌐 Keep-alive server {port}-portda ishga tushmoqda...")
+    try:
+        keep_alive_app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+    except Exception as e:
+        logger.error(f"❌ Keep-alive server ishga tushmadi: {e}")
+
+
+def start_keep_alive_thread():
+    thread = threading.Thread(target=run_keep_alive_server, daemon=True)
+    thread.start()
+    time.sleep(2)  # Flask portga ulanib ulgurishi uchun qisqa kutish
+
+
+# ----------------------------------------------------------------------
+# ASOSIY FUNKSIYA
+# ----------------------------------------------------------------------
+def main():
+    if BOT_TOKEN == "BU_YERGA_TOKENINGIZNI_QOYING" or not OWNER_ID:
+        print("⚠️  Iltimos, avval BOT_TOKEN va OWNER_ID qiymatlarini to'ldiring!")
+        return
+
+    # Portni ENG BIRINCHI bo'lib ochamiz — Render buni tezroq aniqlashi uchun
+    start_keep_alive_thread()
+
+    db_init()
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    post_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{BTN_POST}$"), post_start)],
+        states={
+            WAIT_POST_CONTENT: [MessageHandler(filters.ALL & ~filters.COMMAND, post_receive)],
+            WAIT_POST_CONFIRM: [CallbackQueryHandler(post_confirm, pattern="^post_(confirm|cancel)$")],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    addcat_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(addcat_start, pattern="^admin_addcat$")],
+        states={
+            WAIT_CAT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, addcat_name)],
+            WAIT_CAT_CONTENT: [MessageHandler(filters.ALL & ~filters.COMMAND, addcat_content)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    admin_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(addadmin_start, pattern="^admin_addadmin$"),
+            CallbackQueryHandler(deladmin_start, pattern="^admin_deladmin$"),
+        ],
+        states={
+            WAIT_ADMIN_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, addadmin_receive)],
+            WAIT_DEL_ADMIN_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, deladmin_receive)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    app.add_handler(post_conv)
+    app.add_handler(addcat_conv)
+    app.add_handler(admin_conv)
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("cancel", cancel))
+
+    app.add_handler(CallbackQueryHandler(check_sub_callback, pattern="^check_sub$"))
+    app.add_handler(CallbackQueryHandler(delcat, pattern="^admin_delcat:"))
+
+    # Pastki tugmalarni ushlaydigan umumiy router — eng oxirida bo'lishi kerak
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, main_router))
+
+    app.add_error_handler(error_handler)
+
+    print("✅ Bot ishga tushdi...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == "__main__":
+    main()
