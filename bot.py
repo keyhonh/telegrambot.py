@@ -378,6 +378,39 @@ async def delcat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_query("DELETE FROM categories WHERE id=?", (cat_id,))
     await query.message.edit_text("✅ Bo'lim o'chirildi.")
 
+async def editcat_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+    cat_id = int(query.data.split(":")[1])
+    context.user_data["edit_cat_id"] = cat_id
+    await query.message.reply_text(
+        "✏️ Bu bo'lim uchun yangi kontent yuboring (matn, rasm, video yoki fayl):\n\nBekor qilish uchun /cancel"
+    )
+    return WAIT_EDIT_CONTENT
+
+
+async def editcat_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cat_id = context.user_data.get("edit_cat_id")
+    msg = update.message
+
+    if msg.photo:
+        content_type, file_id, text = "photo", msg.photo[-1].file_id, msg.caption
+    elif msg.document:
+        content_type, file_id, text = "document", msg.document.file_id, msg.caption
+    elif msg.video:
+        content_type, file_id, text = "video", msg.video.file_id, msg.caption
+    else:
+        content_type, file_id, text = "text", None, msg.text
+
+    db_query(
+        "UPDATE categories SET content_type=?, content_text=?, file_id=? WHERE id=?",
+        (content_type, text, file_id, cat_id),
+    )
+    await update.message.reply_text("✅ Bo'lim kontenti yangilandi!", reply_markup=build_admin_menu())
+    context.user_data.pop("edit_cat_id", None)
+    return ConversationHandler.END
 
 async def addcat_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -644,6 +677,13 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
+editcat_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(editcat_start, pattern="^admin_editcat:")],
+        states={
+            WAIT_EDIT_CONTENT: [MessageHandler(filters.ALL & ~filters.COMMAND, editcat_content)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
 
     admin_conv = ConversationHandler(
         entry_points=[
@@ -659,6 +699,7 @@ def main():
 
     app.add_handler(post_conv)
     app.add_handler(addcat_conv)
+    app.add_handler(editcat_conv)
     app.add_handler(admin_conv)
 
     app.add_handler(CommandHandler("start", start))
