@@ -53,7 +53,6 @@ BTN_ADMINS = "👤 Adminlar"
 BTN_STATS = "📊 Statistika"
 
 # Conversation state'lari
-(
     (
     WAIT_POST_CONTENT,
     WAIT_POST_CONFIRM,
