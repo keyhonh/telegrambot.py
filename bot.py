@@ -23,13 +23,13 @@ from telegram.ext import (
 # ----------------------------------------------------------------------
 # SOZLAMALAR
 # ----------------------------------------------------------------------
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "BOT_TOKEN")
-OWNER_ID = int(os.getenv("7195607202", "0"))  # <-- o'z Telegram ID raqamingiz
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID"))    # <-- o'z Telegram ID raqamingiz
 
 # Majburiy obuna kanallari. Bot shu kanal(lar)da ADMIN bo'lishi shart.
-# id: kanal username'i ("@keyhon") yoki -100... ko'rinishidagi ID
+# id: kanal username'i ("@kanalim") yoki -100... ko'rinishidagi ID
 REQUIRED_CHANNELS = [
-    {"id": "@keyhon", "title": "📢 Asosiy kanal", "https://t.me/keyhon": "https://t.me/keyhon"},
+    {"id": "@kanal_username", "title": "📢 Asosiy kanal", "url": "https://t.me/kanal_username"},
     # Kerak bo'lsa yana qo'shishingiz mumkin:
     # {"id": "@ikkinchi_kanal", "title": "📢 Ikkinchi kanal", "url": "https://t.me/ikkinchi_kanal"},
 ]
