@@ -33,7 +33,8 @@ OWNER_ID = int(os.getenv("OWNER_ID"))    # <-- o'z Telegram ID raqamingiz
 # Majburiy obuna kanallari. Bot shu kanal(lar)da ADMIN bo'lishi shart.
 # id: kanal username'i ("@kanalim") yoki -100... ko'rinishidagi ID
 REQUIRED_CHANNELS = [
-    {"id": "@kanal_username", "title": "📢 Asosiy kanal", "url": "https://t.me/kanal_username"},
+    {"id": "@keyhon", "title": "📢 Asosiy kanal", "url": "https://t.me/keyhon"},
+]
     # Kerak bo'lsa yana qo'shishingiz mumkin:
     # {"id": "@ikkinchi_kanal", "title": "📢 Ikkinchi kanal", "url": "https://t.me/ikkinchi_kanal"},
 ]
