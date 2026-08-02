@@ -677,7 +677,7 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
-editcat_conv = ConversationHandler(
+    editcat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(editcat_start, pattern="^admin_editcat:")],
         states={
             WAIT_EDIT_CONTENT: [MessageHandler(filters.ALL & ~filters.COMMAND, editcat_content)],
