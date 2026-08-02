@@ -54,13 +54,15 @@ BTN_STATS = "📊 Statistika"
 
 # Conversation state'lari
 (
+    (
     WAIT_POST_CONTENT,
     WAIT_POST_CONFIRM,
     WAIT_CAT_NAME,
     WAIT_CAT_CONTENT,
     WAIT_ADMIN_ID,
     WAIT_DEL_ADMIN_ID,
-) = range(6)
+    WAIT_EDIT_CONTENT,
+) = range(7)
 
 
 # ----------------------------------------------------------------------
