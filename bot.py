@@ -27,16 +27,16 @@ from telegram.ext import (
 # ----------------------------------------------------------------------
 # SOZLAMALAR
 # ----------------------------------------------------------------------
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID"))    # <-- o'z Telegram ID raqamingiz
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+OWNER_ID = int(os.getenv("OWNER_ID", "0") or "0")    # <-- o'z Telegram ID raqamingiz
 
 # Majburiy obuna kanallari. Bot shu kanal(lar)da ADMIN bo'lishi shart.
 # id: kanal username'i ("@kanalim") yoki -100... ko'rinishidagi ID
 REQUIRED_CHANNELS = [
     {"id": "@keyhon", "title": "📢 Asosiy kanal", "url": "https://t.me/keyhon"},
-]
     # Kerak bo'lsa yana qo'shishingiz mumkin:
-    # {"id": "@ikkinchi_kanal", "title": "📢 Ikkinchi kanal", "url": "https://t.me/ikkinchi_kanal"}
+    # {"id": "@ikkinchi_kanal", "title": "📢 Ikkinchi kanal", "url": "https://t.me/ikkinchi_kanal"},
+]
 
 DB_PATH = "admin_panel.db"
 
@@ -362,7 +362,10 @@ async def categories_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     categories = get_categories()
     keyboard = []
     for cat_id, name in categories:
-        keyboard.append([InlineKeyboardButton(f"🗑 {name}", callback_data=f"admin_delcat:{cat_id}")])
+        keyboard.append([
+            InlineKeyboardButton(f"✏️ {name}", callback_data=f"admin_editcat:{cat_id}"),
+            InlineKeyboardButton(f"🗑 {name}", callback_data=f"admin_delcat:{cat_id}"),
+        ])
     keyboard.append([InlineKeyboardButton("➕ Yangi bo'lim qo'shish", callback_data="admin_addcat")])
     await update.message.reply_text(
         "📂 Bo'limlar ro'yxati (o'chirish uchun bosing):",
@@ -378,6 +381,7 @@ async def delcat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cat_id = int(query.data.split(":")[1])
     db_query("DELETE FROM categories WHERE id=?", (cat_id,))
     await query.message.edit_text("✅ Bo'lim o'chirildi.")
+
 
 async def editcat_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -412,6 +416,7 @@ async def editcat_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bo'lim kontenti yangilandi!", reply_markup=build_admin_menu())
     context.user_data.pop("edit_cat_id", None)
     return ConversationHandler.END
+
 
 async def addcat_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -572,7 +577,6 @@ async def main_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upsert_user(user)
 
     # ---- ADMIN tugmalari ----
-    # ---- ADMIN tugmalari ----
     if is_admin(user.id):
         if text == BTN_POST:
             return await post_start(update, context)
@@ -651,8 +655,8 @@ def start_keep_alive_thread():
 # ASOSIY FUNKSIYA
 # ----------------------------------------------------------------------
 def main():
-    if BOT_TOKEN == "BU_YERGA_TOKENINGIZNI_QOYING" or not OWNER_ID:
-        print("⚠️  Iltimos, avval BOT_TOKEN va OWNER_ID qiymatlarini to'ldiring!")
+    if not BOT_TOKEN or not OWNER_ID:
+        print("⚠️  Iltimos, avval BOT_TOKEN va OWNER_ID muhit o'zgaruvchilarini to'ldiring!")
         return
 
     # Portni ENG BIRINCHI bo'lib ochamiz — Render buni tezroq aniqlashi uchun
@@ -678,6 +682,7 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
+
     editcat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(editcat_start, pattern="^admin_editcat:")],
         states={
