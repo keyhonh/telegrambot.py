@@ -36,8 +36,7 @@ REQUIRED_CHANNELS = [
     {"id": "@keyhon", "title": "📢 Asosiy kanal", "url": "https://t.me/keyhon"},
 ]
     # Kerak bo'lsa yana qo'shishingiz mumkin:
-    # {"id": "@ikkinchi_kanal", "title": "📢 Ikkinchi kanal", "url": "https://t.me/ikkinchi_kanal"},
-]
+    # {"id": "@ikkinchi_kanal", "title": "📢 Ikkinchi kanal", "url": "https://t.me/ikkinchi_kanal"}
 
 DB_PATH = "admin_panel.db"
 
