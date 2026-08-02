@@ -27,8 +27,8 @@ from telegram.ext import (
 # ----------------------------------------------------------------------
 # SOZLAMALAR
 # ----------------------------------------------------------------------
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "BU_YERGA_TOKENINGIZNI_QOYING")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))  # <-- o'z Telegram ID raqamingiz
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID")).   # <-- o'z Telegram ID raqamingiz
 
 # Majburiy obuna kanallari. Bot shu kanal(lar)da ADMIN bo'lishi shart.
 # id: kanal username'i ("@kanalim") yoki -100... ko'rinishidagi ID
