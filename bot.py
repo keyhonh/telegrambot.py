@@ -84,7 +84,8 @@ BTN_LEADERBOARD = "🏆 Reyting"
     WAIT_ADMIN_REPLY,
     WAIT_SEARCH_TERM,
     WAIT_BLOCK_USER_ID,
-) = range(12)
+    WAIT_RESTORE_FILE,
+) = range(13)
 
 
 # ----------------------------------------------------------------------
@@ -374,8 +375,6 @@ async def check_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         t("subscribed_thanks", lang),
         reply_markup=build_user_menu(lang),
     )
-
-
 # ----------------------------------------------------------------------
 # REPLY KEYBOARD (PASTKI TUGMALAR) QURISH
 # ----------------------------------------------------------------------
@@ -481,6 +480,7 @@ async def setlang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t("welcome", lang),
         reply_markup=build_user_menu(lang),
     )
+
 
 # ----------------------------------------------------------------------
 # 📥 INSTAGRAM / YOUTUBE VIDEO YUKLAB OLISH — hammaga ochiq
@@ -704,6 +704,7 @@ async def search_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return ConversationHandler.END
+
 # ----------------------------------------------------------------------
 # 🎮 MINECRAFT VIKTORINA — hammaga ochiq o'yin
 # ----------------------------------------------------------------------
@@ -839,13 +840,20 @@ async def send_quiz_question(update_or_query, context: ContextTypes.DEFAULT_TYPE
     context.user_data["quiz_current_idx"] = idx
     question = MINECRAFT_QUESTIONS[idx]
 
+    # Variantlar tartibini har safar aralashtiramiz
+    order = list(range(len(question["options"])))
+    random.shuffle(order)
+    shuffled_options = [question["options"][i] for i in order]
+    correct_position = order.index(question["correct"])
+    context.user_data["quiz_correct_position"] = correct_position
+
     correct_count = context.user_data.get("quiz_correct", 0)
     answered = context.user_data.get("quiz_answered", 0)
     total = context.user_data.get("quiz_total", QUIZ_MAX_QUESTIONS)
 
     keyboard = [
-        [InlineKeyboardButton(opt_text, callback_data=f"quiz:{idx}:{opt_i}")]
-        for opt_i, opt_text in enumerate(question["options"])
+        [InlineKeyboardButton(opt_text, callback_data=f"quiz:{idx}:{pos}")]
+        for pos, opt_text in enumerate(shuffled_options)
     ]
     keyboard.append([InlineKeyboardButton("🔚 O'yinni to'xtatish", callback_data="quiz_stop")])
 
@@ -915,7 +923,8 @@ async def quiz_answer_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     question = MINECRAFT_QUESTIONS[q_idx]
-    is_correct = answer_idx == question["correct"]
+    correct_position = context.user_data.get("quiz_correct_position")
+    is_correct = answer_idx == correct_position
 
     context.user_data["quiz_answered"] = context.user_data.get("quiz_answered", 0) + 1
     if is_correct:
@@ -1001,7 +1010,6 @@ async def reset_leaderboard_execute(update: Update, context: ContextTypes.DEFAUL
     else:
         await query.message.edit_text("❌ Bekor qilindi, reyting o'zgarmadi.")
 
-
 # ----------------------------------------------------------------------
 # 📩 KEYHONGA MUROJAAT (foydalanuvchi ↔ admin to'g'ridan-to'g'ri xabar)
 # ----------------------------------------------------------------------
@@ -1066,6 +1074,8 @@ async def admin_reply_receive(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     context.user_data.pop("reply_target", None)
     return ConversationHandler.END
+
+
 # ----------------------------------------------------------------------
 # 📢 POST YUBORISH (BROADCAST) — faqat admin
 # ----------------------------------------------------------------------
@@ -1480,8 +1490,41 @@ async def send_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_document(
             document=f,
             filename=f"backup_{datetime.now().strftime('%Y%m%d_%H%M')}.db",
-            caption="💾 Ma'lumotlar bazasining joriy zaxira nusxasi",
+            caption="💾 Ma'lumotlar bazasining joriy zaxira nusxasi\n\n"
+                    "Buni qayta tiklash uchun /restore buyrug'ini yuboring.",
         )
+
+
+async def restore_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "🔄 Avval yuborilgan zaxira (.db) faylini shu yerga yuboring.\n\n"
+        "⚠️ Diqqat: joriy ma'lumotlar shu fayl bilan almashtiriladi!\n\nBekor qilish uchun /cancel"
+    )
+    return WAIT_RESTORE_FILE
+
+
+async def restore_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+
+    doc = update.message.document
+    if not doc or not doc.file_name.endswith(".db"):
+        await update.message.reply_text("❌ Iltimos, .db kengaytmali zaxira faylini yuboring.")
+        return WAIT_RESTORE_FILE
+
+    file = await context.bot.get_file(doc.file_id)
+    await file.download_to_drive(DB_PATH)
+
+    log_action(update.effective_user.id, "Baza zaxiradan tiklandi", doc.file_name)
+    await update.message.reply_text(
+        "✅ Ma'lumotlar bazasi muvaffaqiyatli tiklandi!",
+        reply_markup=build_admin_menu(),
+    )
+    return ConversationHandler.END
+
+
 # ----------------------------------------------------------------------
 # 📊 TO'LIQ STATISTIKA — faqat admin
 # ----------------------------------------------------------------------
@@ -1725,6 +1768,7 @@ def start_keep_alive_thread():
     time.sleep(2)  # Flask portga ulanib ulgurishi uchun qisqa kutish
 
 
+
 # ----------------------------------------------------------------------
 # ASOSIY FUNKSIYA
 # ----------------------------------------------------------------------
@@ -1810,6 +1854,14 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    restore_conv = ConversationHandler(
+        entry_points=[CommandHandler("restore", restore_start)],
+        states={
+            WAIT_RESTORE_FILE: [MessageHandler(filters.Document.ALL, restore_receive)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     app.add_handler(post_conv)
     app.add_handler(addcat_conv)
     app.add_handler(editcat_conv)
@@ -1818,6 +1870,7 @@ def main():
     app.add_handler(admin_conv)
     app.add_handler(search_conv)
     app.add_handler(block_user_conv)
+    app.add_handler(restore_conv)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel))
