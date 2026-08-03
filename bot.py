@@ -14,7 +14,6 @@ from io import BytesIO
 import matplotlib
 matplotlib.use("Agg")  # server muhitida ekransiz ishlash uchun
 import matplotlib.pyplot as plt
-import yt_dlp
 
 from flask import Flask
 
@@ -70,6 +69,7 @@ BTN_SEARCH = "🔍 Qidiruv"
 BTN_FAVORITES = "⭐ Sevimlilar"
 BTN_GAME = "🎮 Minecraft Viktorina"
 BTN_LEADERBOARD = "🏆 Reyting"
+BTN_LANGUAGE = "🌐 Til / Язык / Language"
 
 # Conversation state'lari
 (
@@ -395,9 +395,9 @@ def build_user_menu(lang: str = "uz"):
     if not rows:
         rows = [[KeyboardButton(t("no_sections", lang))]]
     rows.append([KeyboardButton(BTN_SEARCH), KeyboardButton(BTN_FAVORITES)])
-    rows.append([KeyboardButton(BTN_MUSIC)])
     rows.append([KeyboardButton(BTN_GAME), KeyboardButton(BTN_LEADERBOARD)])
     rows.append([KeyboardButton(t("contact_button", lang))])
+    rows.append([KeyboardButton(BTN_LANGUAGE)])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
@@ -415,8 +415,9 @@ def build_admin_menu(lang: str = "uz"):
 
     # Oddiy foydalanuvchi funksiyalari — adminlar ham foydalana oladi
     rows.append([KeyboardButton(BTN_SEARCH), KeyboardButton(BTN_FAVORITES)])
-     rows.append([KeyboardButton(BTN_GAME), KeyboardButton(BTN_LEADERBOARD)])
+    rows.append([KeyboardButton(BTN_GAME), KeyboardButton(BTN_LEADERBOARD)])
     rows.append([KeyboardButton(t("contact_button", lang))])
+    rows.append([KeyboardButton(BTN_LANGUAGE)])
 
     # Faqat adminlar uchun boshqaruv tugmalari
     rows.append([KeyboardButton(BTN_POST), KeyboardButton(BTN_CATEGORIES)])
@@ -436,6 +437,10 @@ def build_language_keyboard():
         [InlineKeyboardButton(LANGUAGE_NAMES["en"], callback_data="setlang:en")],
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(t("choose_language", "uz"), reply_markup=build_language_keyboard())
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -484,7 +489,9 @@ async def setlang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t("welcome", lang),
         reply_markup=build_user_menu(lang),
     )
- ----------------------------------------------------------------------
+
+
+# ----------------------------------------------------------------------
 # FOYDALANUVCHI: BO'LIM TANLASH
 # ----------------------------------------------------------------------
 async def send_category_content(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, cat_id: int, name: str):
@@ -587,6 +594,7 @@ async def search_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return ConversationHandler.END
+
 # ----------------------------------------------------------------------
 # 🎮 MINECRAFT VIKTORINA — hammaga ochiq o'yin
 # ----------------------------------------------------------------------
@@ -891,6 +899,9 @@ async def reset_leaderboard_execute(update: Update, context: ContextTypes.DEFAUL
         await query.message.edit_text("✅ Reyting tozalandi — barcha natijalar 0 ga tushirildi.")
     else:
         await query.message.edit_text("❌ Bekor qilindi, reyting o'zgarmadi.")
+
+
+
 # ----------------------------------------------------------------------
 # 📩 KEYHONGA MUROJAAT (foydalanuvchi ↔ admin to'g'ridan-to'g'ri xabar)
 # ----------------------------------------------------------------------
@@ -1404,6 +1415,8 @@ async def restore_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=build_admin_menu(),
     )
     return ConversationHandler.END
+
+
 # ----------------------------------------------------------------------
 # 📊 TO'LIQ STATISTIKA — faqat admin
 # ----------------------------------------------------------------------
@@ -1526,7 +1539,6 @@ async def daily_stats_job(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"Kunlik statistika yuborishda xatolik: {e}")
 
-
 # ----------------------------------------------------------------------
 # ASOSIY MATN ROUTERI — pastki tugmalarni ushlaydi
 # ----------------------------------------------------------------------
@@ -1542,6 +1554,8 @@ async def main_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await leaderboard_view(update, context)
     if text == BTN_FAVORITES:
         return await favorites_view(update, context)
+    if text == BTN_LANGUAGE:
+        return await language_command(update, context)
 
     # ---- ADMIN tugmalari ----
     if is_admin(user.id):
@@ -1742,7 +1756,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel))
-    app.add_handler(CommandHandler("music", music_command))
+    app.add_handler(CommandHandler("language", language_command))
 
     app.add_handler(CallbackQueryHandler(check_sub_callback, pattern="^check_sub$"))
     app.add_handler(CallbackQueryHandler(setlang_callback, pattern="^setlang:"))
