@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import random
@@ -67,6 +68,7 @@ BTN_BACKUP = "💾 Zaxira nusxa"
 BTN_CONTACT = "📩 Keyhonga murojaat"
 BTN_SEARCH = "🔍 Qidiruv"
 BTN_FAVORITES = "⭐ Sevimlilar"
+BTN_MUSIC = "🎵 Qo'shiq qidirish"
 BTN_GAME = "🎮 Minecraft Viktorina"
 BTN_LEADERBOARD = "🏆 Reyting"
 
@@ -85,7 +87,8 @@ BTN_LEADERBOARD = "🏆 Reyting"
     WAIT_SEARCH_TERM,
     WAIT_BLOCK_USER_ID,
     WAIT_RESTORE_FILE,
-) = range(13)
+    WAIT_MUSIC_QUERY,
+) = range(14)
 
 
 # ----------------------------------------------------------------------
@@ -375,6 +378,8 @@ async def check_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         t("subscribed_thanks", lang),
         reply_markup=build_user_menu(lang),
     )
+
+
 # ----------------------------------------------------------------------
 # REPLY KEYBOARD (PASTKI TUGMALAR) QURISH
 # ----------------------------------------------------------------------
@@ -392,6 +397,7 @@ def build_user_menu(lang: str = "uz"):
     if not rows:
         rows = [[KeyboardButton(t("no_sections", lang))]]
     rows.append([KeyboardButton(BTN_SEARCH), KeyboardButton(BTN_FAVORITES)])
+    rows.append([KeyboardButton(BTN_MUSIC)])
     rows.append([KeyboardButton(BTN_GAME), KeyboardButton(BTN_LEADERBOARD)])
     rows.append([KeyboardButton(t("contact_button", lang))])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
@@ -411,6 +417,7 @@ def build_admin_menu(lang: str = "uz"):
 
     # Oddiy foydalanuvchi funksiyalari — adminlar ham foydalana oladi
     rows.append([KeyboardButton(BTN_SEARCH), KeyboardButton(BTN_FAVORITES)])
+    rows.append([KeyboardButton(BTN_MUSIC)])
     rows.append([KeyboardButton(BTN_GAME), KeyboardButton(BTN_LEADERBOARD)])
     rows.append([KeyboardButton(t("contact_button", lang))])
 
@@ -480,108 +487,64 @@ async def setlang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t("welcome", lang),
         reply_markup=build_user_menu(lang),
     )
-
-
 # ----------------------------------------------------------------------
-# 📥 INSTAGRAM / YOUTUBE VIDEO YUKLAB OLISH — hammaga ochiq
+# 🎵 QO'SHIQ QIDIRISH (musiqa) — hammaga ochiq, YouTube orqali qidiradi
 # ----------------------------------------------------------------------
-YOUTUBE_RE = re.compile(r"(youtube\.com|youtu\.be)", re.IGNORECASE)
-INSTAGRAM_RE = re.compile(r"instagram\.com", re.IGNORECASE)
-URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
-
 MAX_TELEGRAM_FILE_SIZE = 50 * 1024 * 1024  # Telegram bot uchun 50 MB limit
 
 
-def is_youtube_url(text: str) -> bool:
-    return bool(YOUTUBE_RE.search(text))
+def _search_music_sync(query: str, work_dir: str):
+    """YouTube'dan qo'shiq qidirib, faqat audio (musiqa) yuklab oladi."""
+    result = {"audio_path": None, "title": None, "error": None}
 
-
-def is_instagram_url(text: str) -> bool:
-    return bool(INSTAGRAM_RE.search(text))
-
-
-def is_generic_url(text: str) -> bool:
-    return bool(URL_RE.search(text))
-
-
-def _download_media_sync(url: str, work_dir: str):
-    """yt-dlp orqali video va audio faylni diskka yuklab oladi (sinxron, alohida oqimda ishlaydi)."""
-    result = {"video_path": None, "audio_path": None, "title": None, "error": None}
-
-    # --- Video (ffmpeg shart bo'lmasligi uchun progressiv mp4 formatini tanlaymiz) ---
-    video_opts = {
-        "format": "best[ext=mp4]/best",
-        "outtmpl": os.path.join(work_dir, "video.%(ext)s"),
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-    }
-    try:
-        with yt_dlp.YoutubeDL(video_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            result["title"] = info.get("title", "Video")
-            result["video_path"] = ydl.prepare_filename(info)
-    except Exception as e:
-        result["error"] = str(e)
-        return result
-
-    # --- Faqat audio (musiqa) — ffmpeg shart bo'lmasligi uchun konvertatsiyasiz ---
-    audio_opts = {
+    opts = {
         "format": "bestaudio[ext=m4a]/bestaudio",
         "outtmpl": os.path.join(work_dir, "audio.%(ext)s"),
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
+        "socket_timeout": 45,
+        "retries": 3,
+        "default_search": "ytsearch1",
     }
     try:
-        with yt_dlp.YoutubeDL(audio_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(query, download=True)
+            if "entries" in info and info["entries"]:
+                info = info["entries"][0]
+            result["title"] = info.get("title", "Qo'shiq")
             result["audio_path"] = ydl.prepare_filename(info)
-    except Exception:
-        pass  # audio topilmasa ham video baribir yuborilaveradi
+    except Exception as e:
+        result["error"] = str(e)
 
     return result
 
 
-async def handle_video_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
-    status_msg = await update.message.reply_text("⏳ Video yuklab olinmoqda, biroz kuting...")
+async def _run_music_search_in_thread(query: str, work_dir: str):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _search_music_sync, query, work_dir)
 
-    work_dir = tempfile.mkdtemp(prefix=f"dl_{uuid.uuid4().hex}_")
+
+async def handle_music_search(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
+    status_msg = await update.message.reply_text(f"🎵 \"{query}\" qidirilmoqda...")
+    work_dir = tempfile.mkdtemp(prefix=f"music_{uuid.uuid4().hex}_")
     try:
-        result = await _run_download_in_thread(url, work_dir)
+        result = await _run_music_search_in_thread(query, work_dir)
 
-        if result.get("error"):
-            await status_msg.edit_text(
-                "❌ Video topilmadi yoki yuklab bo'lmadi. Havola to'g'ri ekanini va "
-                "video ochiq (public) ekanini tekshiring."
-            )
-            return
-
-        video_path = result.get("video_path")
         audio_path = result.get("audio_path")
-        title = result.get("title", "Video")
-
-        if video_path and os.path.exists(video_path):
-            if os.path.getsize(video_path) <= MAX_TELEGRAM_FILE_SIZE:
-                with open(video_path, "rb") as f:
-                    await update.message.reply_video(video=f, caption=f"🎬 {title}")
-            else:
-                await update.message.reply_text(
-                    "⚠️ Video hajmi 50 MB dan katta — Telegram orqali yuborib bo'lmaydi."
-                )
-        else:
-            await status_msg.edit_text("❌ Video yuklab bo'lmadi.")
+        if result.get("error") or not audio_path or not os.path.exists(audio_path):
+            await status_msg.edit_text("❌ Qo'shiq topilmadi. Boshqa nom bilan urinib ko'ring.")
             return
 
-        if audio_path and os.path.exists(audio_path):
-            if os.path.getsize(audio_path) <= MAX_TELEGRAM_FILE_SIZE:
-                with open(audio_path, "rb") as f:
-                    await update.message.reply_audio(audio=f, title=title)
-
-        await status_msg.delete()
+        if os.path.getsize(audio_path) <= MAX_TELEGRAM_FILE_SIZE:
+            with open(audio_path, "rb") as f:
+                await update.message.reply_audio(audio=f, title=result.get("title", "Qo'shiq"))
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text("⚠️ Fayl hajmi 50 MB dan katta, yubora olmayman.")
 
     except Exception as e:
-        logger.warning(f"Video yuklashda xatolik: {e}")
+        logger.warning(f"Musiqa qidirishda xatolik: {e}")
         await status_msg.edit_text("❌ Xatolik yuz berdi. Keyinroq qayta urinib ko'ring.")
     finally:
         for fname in os.listdir(work_dir):
@@ -595,10 +558,23 @@ async def handle_video_link(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             pass
 
 
-async def _run_download_in_thread(url: str, work_dir: str):
-    import asyncio
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _download_media_sync, url, work_dir)
+async def music_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Foydalanish: /music qo'shiq nomi\nMasalan: /music Faydee Deja Vu")
+        return
+    query = " ".join(context.args)
+    await handle_music_search(update, context, query)
+
+
+async def music_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🎵 Qidirmoqchi bo'lgan qo'shiq nomini yozing:\n\nBekor qilish uchun /cancel")
+    return WAIT_MUSIC_QUERY
+
+
+async def music_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.message.text.strip()
+    await handle_music_search(update, context, query)
+    return ConversationHandler.END
 
 
 # ----------------------------------------------------------------------
@@ -704,7 +680,6 @@ async def search_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return ConversationHandler.END
-
 # ----------------------------------------------------------------------
 # 🎮 MINECRAFT VIKTORINA — hammaga ochiq o'yin
 # ----------------------------------------------------------------------
@@ -1009,7 +984,6 @@ async def reset_leaderboard_execute(update: Update, context: ContextTypes.DEFAUL
         await query.message.edit_text("✅ Reyting tozalandi — barcha natijalar 0 ga tushirildi.")
     else:
         await query.message.edit_text("❌ Bekor qilindi, reyting o'zgarmadi.")
-
 # ----------------------------------------------------------------------
 # 📩 KEYHONGA MUROJAAT (foydalanuvchi ↔ admin to'g'ridan-to'g'ri xabar)
 # ----------------------------------------------------------------------
@@ -1523,8 +1497,6 @@ async def restore_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=build_admin_menu(),
     )
     return ConversationHandler.END
-
-
 # ----------------------------------------------------------------------
 # 📊 TO'LIQ STATISTIKA — faqat admin
 # ----------------------------------------------------------------------
@@ -1656,16 +1628,6 @@ async def main_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     upsert_user(user)
 
-    # ---- VIDEO HAVOLASI (hammaga ochiq — YouTube/Instagram) ----
-    if is_generic_url(text):
-        if is_youtube_url(text) or is_instagram_url(text):
-            await handle_video_link(update, context, text.strip())
-        else:
-            await update.message.reply_text(
-                "❌ Faqat Instagram va YouTube havolalari orqali video yuklab olish mumkin."
-            )
-        return
-
     # ---- O'YIN (hammaga ochiq) ----
     if text == BTN_GAME:
         return await game_start(update, context)
@@ -1768,7 +1730,6 @@ def start_keep_alive_thread():
     time.sleep(2)  # Flask portga ulanib ulgurishi uchun qisqa kutish
 
 
-
 # ----------------------------------------------------------------------
 # ASOSIY FUNKSIYA
 # ----------------------------------------------------------------------
@@ -1846,6 +1807,14 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    music_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC)}$"), music_start)],
+        states={
+            WAIT_MUSIC_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, music_receive)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     block_user_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(block_user_start, pattern="^block_user_start$")],
         states={
@@ -1869,11 +1838,13 @@ def main():
     app.add_handler(admin_reply_conv)
     app.add_handler(admin_conv)
     app.add_handler(search_conv)
+    app.add_handler(music_conv)
     app.add_handler(block_user_conv)
     app.add_handler(restore_conv)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(CommandHandler("music", music_command))
 
     app.add_handler(CallbackQueryHandler(check_sub_callback, pattern="^check_sub$"))
     app.add_handler(CallbackQueryHandler(setlang_callback, pattern="^setlang:"))
