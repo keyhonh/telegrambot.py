@@ -398,13 +398,28 @@ def build_user_menu(lang: str = "uz"):
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
-def build_admin_menu():
-    rows = [
-        [KeyboardButton(BTN_POST), KeyboardButton(BTN_CATEGORIES)],
-        [KeyboardButton(BTN_ADMINS), KeyboardButton(BTN_STATS)],
-        [KeyboardButton(BTN_USERS), KeyboardButton(BTN_HISTORY)],
-        [KeyboardButton(BTN_BACKUP)],
-    ]
+def build_admin_menu(lang: str = "uz"):
+    categories = get_categories()
+    rows = []
+    row = []
+    for cat_id, name in categories:
+        row.append(KeyboardButton(name))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+
+    # Oddiy foydalanuvchi funksiyalari — adminlar ham foydalana oladi
+    rows.append([KeyboardButton(BTN_SEARCH), KeyboardButton(BTN_FAVORITES)])
+    rows.append([KeyboardButton(BTN_GAME), KeyboardButton(BTN_LEADERBOARD)])
+    rows.append([KeyboardButton(t("contact_button", lang))])
+
+    # Faqat adminlar uchun boshqaruv tugmalari
+    rows.append([KeyboardButton(BTN_POST), KeyboardButton(BTN_CATEGORIES)])
+    rows.append([KeyboardButton(BTN_ADMINS), KeyboardButton(BTN_STATS)])
+    rows.append([KeyboardButton(BTN_USERS), KeyboardButton(BTN_HISTORY)])
+    rows.append([KeyboardButton(BTN_BACKUP)])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
@@ -466,7 +481,6 @@ async def setlang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t("welcome", lang),
         reply_markup=build_user_menu(lang),
     )
-
 
 # ----------------------------------------------------------------------
 # 📥 INSTAGRAM / YOUTUBE VIDEO YUKLAB OLISH — hammaga ochiq
@@ -690,8 +704,6 @@ async def search_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return ConversationHandler.END
-
-
 # ----------------------------------------------------------------------
 # 🎮 MINECRAFT VIKTORINA — hammaga ochiq o'yin
 # ----------------------------------------------------------------------
@@ -989,6 +1001,7 @@ async def reset_leaderboard_execute(update: Update, context: ContextTypes.DEFAUL
     else:
         await query.message.edit_text("❌ Bekor qilindi, reyting o'zgarmadi.")
 
+
 # ----------------------------------------------------------------------
 # 📩 KEYHONGA MUROJAAT (foydalanuvchi ↔ admin to'g'ridan-to'g'ri xabar)
 # ----------------------------------------------------------------------
@@ -1053,8 +1066,6 @@ async def admin_reply_receive(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     context.user_data.pop("reply_target", None)
     return ConversationHandler.END
-
-
 # ----------------------------------------------------------------------
 # 📢 POST YUBORISH (BROADCAST) — faqat admin
 # ----------------------------------------------------------------------
@@ -1183,6 +1194,7 @@ async def post_time_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     context.user_data.pop("post_message", None)
     return ConversationHandler.END
+
 
 # ----------------------------------------------------------------------
 # 📂 BO'LIMLAR (KATEGORIYALAR) — faqat admin
@@ -1316,8 +1328,6 @@ async def addcat_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ '{name}' bo'limi qo'shildi!", reply_markup=build_admin_menu())
     context.user_data.pop("new_cat_name", None)
     return ConversationHandler.END
-
-
 # ----------------------------------------------------------------------
 # 👤 ADMINLAR — faqat admin (qo'shish/o'chirish faqat OWNER)
 # ----------------------------------------------------------------------
@@ -1380,6 +1390,7 @@ async def deladmin_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_query("DELETE FROM admins WHERE user_id=?", (del_id,))
     await update.message.reply_text(f"✅ {del_id} adminlikdan chiqarildi.", reply_markup=build_admin_menu())
     return ConversationHandler.END
+
 
 # ----------------------------------------------------------------------
 # 🚫 FOYDALANUVCHILARNI BLOKLASH — faqat admin
@@ -1471,8 +1482,6 @@ async def send_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename=f"backup_{datetime.now().strftime('%Y%m%d_%H%M')}.db",
             caption="💾 Ma'lumotlar bazasining joriy zaxira nusxasi",
         )
-
-
 # ----------------------------------------------------------------------
 # 📊 TO'LIQ STATISTIKA — faqat admin
 # ----------------------------------------------------------------------
@@ -1619,6 +1628,8 @@ async def main_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await game_start(update, context)
     if text == BTN_LEADERBOARD:
         return await leaderboard_view(update, context)
+    if text == BTN_FAVORITES:
+        return await favorites_view(update, context)
 
     # ---- ADMIN tugmalari ----
     if is_admin(user.id):
@@ -1661,9 +1672,6 @@ async def main_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_subscribe_prompt(context.bot, update.effective_chat.id, missing, lang)
         return
 
-    if text == BTN_FAVORITES:
-        return await favorites_view(update, context)
-
     row = db_query("SELECT id FROM categories WHERE name=?", (text,), fetch="one")
     if row:
         await send_category_content(context, update.effective_chat.id, user.id, row[0], text)
@@ -1689,6 +1697,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Xatolik yuz berdi:", exc_info=context.error)
+
 
 # ----------------------------------------------------------------------
 # KEEP-ALIVE HTTP SERVER (Render bepul tarifida bot uxlab qolmasligi uchun)
