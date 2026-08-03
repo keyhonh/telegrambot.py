@@ -68,7 +68,6 @@ BTN_BACKUP = "💾 Zaxira nusxa"
 BTN_CONTACT = "📩 Keyhonga murojaat"
 BTN_SEARCH = "🔍 Qidiruv"
 BTN_FAVORITES = "⭐ Sevimlilar"
-BTN_MUSIC = "🎵 Qo'shiq qidirish"
 BTN_GAME = "🎮 Minecraft Viktorina"
 BTN_LEADERBOARD = "🏆 Reyting"
 
@@ -87,8 +86,7 @@ BTN_LEADERBOARD = "🏆 Reyting"
     WAIT_SEARCH_TERM,
     WAIT_BLOCK_USER_ID,
     WAIT_RESTORE_FILE,
-    WAIT_MUSIC_QUERY,
-) = range(14)
+) = range(13)
 
 
 # ----------------------------------------------------------------------
@@ -417,8 +415,7 @@ def build_admin_menu(lang: str = "uz"):
 
     # Oddiy foydalanuvchi funksiyalari — adminlar ham foydalana oladi
     rows.append([KeyboardButton(BTN_SEARCH), KeyboardButton(BTN_FAVORITES)])
-    rows.append([KeyboardButton(BTN_MUSIC)])
-    rows.append([KeyboardButton(BTN_GAME), KeyboardButton(BTN_LEADERBOARD)])
+     rows.append([KeyboardButton(BTN_GAME), KeyboardButton(BTN_LEADERBOARD)])
     rows.append([KeyboardButton(t("contact_button", lang))])
 
     # Faqat adminlar uchun boshqaruv tugmalari
@@ -487,105 +484,7 @@ async def setlang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t("welcome", lang),
         reply_markup=build_user_menu(lang),
     )
-# ----------------------------------------------------------------------
-# 🎵 QO'SHIQ QIDIRISH (musiqa) — hammaga ochiq, YouTube orqali qidiradi
-# ----------------------------------------------------------------------
-MAX_TELEGRAM_FILE_SIZE = 50 * 1024 * 1024  # Telegram bot uchun 50 MB limit
-
-
-def _search_music_sync(query: str, work_dir: str):
-    """YouTube'dan qo'shiq qidirib, faqat audio (musiqa) yuklab oladi."""
-    result = {"audio_path": None, "title": None, "error": None}
-
-    opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
-        "outtmpl": os.path.join(work_dir, "audio.%(ext)s"),
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "socket_timeout": 45,
-        "retries": 3,
-    }
-    search_query = f"ytsearch1:{query}"
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(search_query, download=True)
-            if "entries" in info and info["entries"]:
-                info = info["entries"][0]
-            result["title"] = info.get("title", "Qo'shiq")
-            audio_path = ydl.prepare_filename(info)
-
-            if not os.path.exists(audio_path):
-                # Kengaytma boshqacha bo'lishi mumkin — papkadagi haqiqiy faylni topamiz
-                candidates = [f for f in os.listdir(work_dir) if f.startswith("audio.")]
-                if candidates:
-                    audio_path = os.path.join(work_dir, candidates[0])
-
-            result["audio_path"] = audio_path
-    except Exception as e:
-        result["error"] = f"{type(e).__name__}: {e}"
-
-    return result
-
-async def _run_music_search_in_thread(query: str, work_dir: str):
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _search_music_sync, query, work_dir)
-
-
-async def handle_music_search(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
-    status_msg = await update.message.reply_text(f"🎵 \"{query}\" qidirilmoqda...")
-    work_dir = tempfile.mkdtemp(prefix=f"music_{uuid.uuid4().hex}_")
-    try:
-        result = await _run_music_search_in_thread(query, work_dir)
-
-        audio_path = result.get("audio_path")
-        if result.get("error") or not audio_path or not os.path.exists(audio_path):
-            logger.warning(f"Musiqa topilmadi ('{query}'): {result.get('error')}")
-            await status_msg.edit_text("❌ Qo'shiq topilmadi. Boshqa nom bilan urinib ko'ring.")
-            return
-
-        if os.path.getsize(audio_path) <= MAX_TELEGRAM_FILE_SIZE:
-            with open(audio_path, "rb") as f:
-                await update.message.reply_audio(audio=f, title=result.get("title", "Qo'shiq"))
-            await status_msg.delete()
-        else:
-            await status_msg.edit_text("⚠️ Fayl hajmi 50 MB dan katta, yubora olmayman.")
-
-    except Exception as e:
-        logger.warning(f"Musiqa qidirishda xatolik: {e}")
-        await status_msg.edit_text("❌ Xatolik yuz berdi. Keyinroq qayta urinib ko'ring.")
-    finally:
-        for fname in os.listdir(work_dir):
-            try:
-                os.remove(os.path.join(work_dir, fname))
-            except OSError:
-                pass
-        try:
-            os.rmdir(work_dir)
-        except OSError:
-            pass
-
-
-async def music_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Foydalanish: /music qo'shiq nomi\nMasalan: /music Faydee Deja Vu")
-        return
-    query = " ".join(context.args)
-    await handle_music_search(update, context, query)
-
-
-async def music_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎵 Qidirmoqchi bo'lgan qo'shiq nomini yozing:\n\nBekor qilish uchun /cancel")
-    return WAIT_MUSIC_QUERY
-
-
-async def music_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.message.text.strip()
-    await handle_music_search(update, context, query)
-    return ConversationHandler.END
-
-
-# ----------------------------------------------------------------------
+ ----------------------------------------------------------------------
 # FOYDALANUVCHI: BO'LIM TANLASH
 # ----------------------------------------------------------------------
 async def send_category_content(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, cat_id: int, name: str):
@@ -1815,14 +1714,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    music_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC)}$"), music_start)],
-        states={
-            WAIT_MUSIC_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, music_receive)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
     block_user_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(block_user_start, pattern="^block_user_start$")],
         states={
@@ -1846,7 +1737,6 @@ def main():
     app.add_handler(admin_reply_conv)
     app.add_handler(admin_conv)
     app.add_handler(search_conv)
-    app.add_handler(music_conv)
     app.add_handler(block_user_conv)
     app.add_handler(restore_conv)
 
