@@ -139,6 +139,12 @@ def db_init():
         conn.commit()
     except sqlite3.OperationalError:
         pass
+    # Majburiy obuna xabari bir foydalanuvchiga qayta-qayta chiqmasligi uchun
+    try:
+        cur.execute("ALTER TABLE users ADD COLUMN subscribe_prompted INTEGER DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
     cur.execute("""
         CREATE TABLE IF NOT EXISTS favorites (
             user_id INTEGER,
@@ -208,14 +214,16 @@ def upsert_user(user):
     now = datetime.now().isoformat()
     existing = db_query("SELECT user_id FROM users WHERE user_id=?", (user.id,), fetch="one")
     if existing:
+        # Obuna holatini har bir xabarda avtomatik 1 qilib yubormaymiz.
+        # Uni faqat haqiqiy obuna tekshiruvi o'zgartiradi.
         db_query(
-            "UPDATE users SET username=?, first_name=?, last_active=?, subscribed=1 WHERE user_id=?",
+            "UPDATE users SET username=?, first_name=?, last_active=? WHERE user_id=?",
             (user.username, user.first_name, now, user.id),
         )
     else:
         db_query(
             "INSERT INTO users (user_id, username, first_name, joined_at, last_active, subscribed) "
-            "VALUES (?, ?, ?, ?, ?, 1)",
+            "VALUES (?, ?, ?, ?, ?, 0)",
             (user.id, user.username, user.first_name, now, now),
         )
 
@@ -361,6 +369,45 @@ async def send_subscribe_prompt(bot, chat_id, missing, lang: str = "uz"):
     )
 
 
+async def ensure_subscription(bot, user_id: int, chat_id: int, lang: str = "uz") -> bool:
+    """
+    Obunani tekshiradi, lekin obuna bo'lmagan foydalanuvchiga
+    majburiy obuna xabarini faqat BIR MARTA yuboradi.
+
+    Foydalanuvchi obuna bo'lgach, keyingi xabarlarida qayta so'ralmaydi.
+    Agar keyinchalik kanaldan chiqsa, yana bir marta so'raladi.
+    """
+    missing = await get_not_subscribed(bot, user_id)
+
+    row = db_query(
+        "SELECT subscribed, subscribe_prompted FROM users WHERE user_id=?",
+        (user_id,),
+        fetch="one",
+    )
+    prompted = bool(row and row[1])
+
+    if missing:
+        db_query(
+            "UPDATE users SET subscribed=0 WHERE user_id=?",
+            (user_id,),
+        )
+
+        if not prompted:
+            await send_subscribe_prompt(bot, chat_id, missing, lang)
+            db_query(
+                "UPDATE users SET subscribe_prompted=1 WHERE user_id=?",
+                (user_id,),
+            )
+        return False
+
+    # Obuna tasdiqlandi.
+    db_query(
+        "UPDATE users SET subscribed=1, subscribe_prompted=0 WHERE user_id=?",
+        (user_id,),
+    )
+    return True
+
+
 async def check_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     lang = get_user_lang(query.from_user.id)
@@ -371,13 +418,15 @@ async def check_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer(t("check_button", lang))
     await query.message.delete()
     upsert_user(query.from_user)
+    db_query(
+        "UPDATE users SET subscribed=1, subscribe_prompted=0 WHERE user_id=?",
+        (query.from_user.id,),
+    )
     await context.bot.send_message(
         query.message.chat_id,
         t("subscribed_thanks", lang),
         reply_markup=build_user_menu(lang),
     )
-
-
 # ----------------------------------------------------------------------
 # REPLY KEYBOARD (PASTKI TUGMALAR) QURISH
 # ----------------------------------------------------------------------
@@ -461,9 +510,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    missing = await get_not_subscribed(context.bot, user.id)
-    if missing:
-        await send_subscribe_prompt(context.bot, update.effective_chat.id, missing, row[0])
+    if not await ensure_subscription(context.bot, user.id, update.effective_chat.id, row[0]):
         return
 
     await update.message.reply_text(
@@ -479,9 +526,7 @@ async def setlang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_user_lang(query.from_user.id, lang)
     await query.message.delete()
 
-    missing = await get_not_subscribed(context.bot, query.from_user.id)
-    if missing:
-        await send_subscribe_prompt(context.bot, query.message.chat_id, missing, lang)
+    if not await ensure_subscription(context.bot, query.from_user.id, query.message.chat_id, lang):
         return
 
     await context.bot.send_message(
@@ -594,6 +639,7 @@ async def search_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return ConversationHandler.END
+
 
 # ----------------------------------------------------------------------
 # 🎮 MINECRAFT VIKTORINA — hammaga ochiq o'yin
@@ -899,8 +945,6 @@ async def reset_leaderboard_execute(update: Update, context: ContextTypes.DEFAUL
         await query.message.edit_text("✅ Reyting tozalandi — barcha natijalar 0 ga tushirildi.")
     else:
         await query.message.edit_text("❌ Bekor qilindi, reyting o'zgarmadi.")
-
-
 
 # ----------------------------------------------------------------------
 # 📩 KEYHONGA MUROJAAT (foydalanuvchi ↔ admin to'g'ridan-to'g'ri xabar)
@@ -1230,6 +1274,7 @@ async def addcat_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ '{name}' bo'limi qo'shildi!", reply_markup=build_admin_menu())
     context.user_data.pop("new_cat_name", None)
     return ConversationHandler.END
+
 # ----------------------------------------------------------------------
 # 👤 ADMINLAR — faqat admin (qo'shish/o'chirish faqat OWNER)
 # ----------------------------------------------------------------------
@@ -1538,7 +1583,6 @@ async def daily_stats_job(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_photo(OWNER_ID, photo=chart, caption="📈 Vizual statistika")
     except Exception as e:
         logger.warning(f"Kunlik statistika yuborishda xatolik: {e}")
-
 # ----------------------------------------------------------------------
 # ASOSIY MATN ROUTERI — pastki tugmalarni ushlaydi
 # ----------------------------------------------------------------------
@@ -1593,9 +1637,7 @@ async def main_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_blocked(user.id):
         return  # bloklangan foydalanuvchiga javob berilmaydi
 
-    missing = await get_not_subscribed(context.bot, user.id)
-    if missing:
-        await send_subscribe_prompt(context.bot, update.effective_chat.id, missing, lang)
+    if not await ensure_subscription(context.bot, user.id, update.effective_chat.id, lang):
         return
 
     row = db_query("SELECT id FROM categories WHERE name=?", (text,), fetch="one")
