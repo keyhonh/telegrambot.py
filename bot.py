@@ -45,7 +45,7 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0") or "0")    # <-- o'z Telegram ID raqam
 REQUIRED_CHANNELS = [
     {"id": "@keyhon", "title": "📢 Asosiy kanal", "url": "https://t.me/keyhon"},
     # Kerak bo'lsa yana qo'shishingiz mumkin:
-    {"id": "@keyhonhbot", "title": "📢 Ikkinchi kanal", "url": "https://t.me/keyhonhbot"},
+    #{"id": "@keyhonhbot", "title": "📢 Ikkinchi kanal", "url": "https://t.me/keyhonhbot"},
 ]
 
 DB_PATH = "admin_panel.db"
