@@ -1034,8 +1034,7 @@ async def quiz_finish(app, user_id: int, reason: str):
     lv = LEVELS[s["level"]]
     total = len(s["questions"])
     pct = round(100 * s["correct"] / total) if total else 0
-    need = math.ceil(total / 2)
-    counted = s["answered"] >= need
+    counted = s["answered"] >= 1     # kamida bitta savolga javob berilgan o'yin hisoblanadi
 
     if reason == "idle":
         head = f"⏰ Ketma-ket {MAX_IDLE} ta savolga javob bermadingiz, o'yin to'xtatildi."
@@ -1054,7 +1053,7 @@ async def quiz_finish(app, user_id: int, reason: str):
         save_quiz_result(user_id, s["name"], s["level"], pct)
         text += "\n\n🏆 Natijangiz reytingga qo'shildi."
     else:
-        text += f"\n\nℹ️ Reytingga qo'shilishi uchun kamida {need} ta savolga javob berish kerak."
+        text += "\n\nℹ️ Birorta ham savolga javob berilmagani uchun natija reytingga qo'shilmadi."
     text += "\n\nYana o'ynash uchun \"🎮 Minecraft Viktorina\" tugmasini bosing."
 
     try:
